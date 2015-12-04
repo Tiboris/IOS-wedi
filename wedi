@@ -1,0 +1,200 @@
+#!/bin/sh
+##########################################################################################################################
+###   File: wedi                       ###############   Date: 29.03.2015                                   ##############
+###   Description: script - wrapper    ###############   Author: Tibor Dudlák, xdudla00@stud.fit.vutbr.cz   ##############
+##########################################################################################################################
+################################################# VARIABLES ##############################################################
+OPTIND=1
+export LC_ALL=C
+################################################# FUNCTIONS ##############################################################
+test_var() ###################### FUNCTION WHICH CONTROLS VARIABLES ######################################################
+{
+    if [ -z "$WEDI_RC" ]; then  # TRUE WHEN $WEDI_RC IS NOT SET 
+        echo "Variable WEDI_RC is not set">&2 # ERROR message to stderr()
+        exit 7 # EXIT CODE
+    elif [ -z "$EDITOR" ] && [ -z "$VISUAL" ]; then # TRUE WHEN $EDITOR AND $VISUAL ARE BOTH NOT SET
+        echo "Variables $EDITOR and VISUAL are not set.">&2 # ERROR MESSAGE TO STERR
+        exit 8 # EXIT CODE
+    elif [ -z "$EDITOR" ]; then # TRUE WHEN $EDITOR IS NOT SET
+        tool=$VISUAL # EDITING TOOL IS SET TO VISUAL
+    else
+        tool=$EDITOR # WHEN $EDITOR IS SET THEN EDITING TOOL IS $EDITOR
+    fi
+    if [ ! -w "$WEDI_RC" ]; then # $WEDI_RC IS PATH TO FILE / tRUE WHEN LOGFILE IS NOT WRITABLE  
+        echo "Write permission is NOT granted on $WEDI_RC">&2 # ERROR MESSAGE TO STERR
+        exit 9 # EXIT CODE
+    fi
+} #########################################################################################################################
+do_edit() ######################## FUNCTION WHICH RUN EDITOR WITH PROPER FILE #############################################
+{
+    $1 "$2" # $1 IS EDITING TOOL $2 IS FILE 
+    ex_code=$?  #STORES CODE WHICH IS RETURNED BY EDITOR                                         
+    trace=`readlink -f "$2"` # FULL TRACE TO FILE
+    filename=`echo "$trace"| rev | cut -d '/' -f1 | rev` # SOME MAGIC, READING FROM TRACE REVARDS FILENAME THEN CUT AND REV
+    printf "\"$filename\"|`date +%F`|$tool|$trace\n">>$WEDI_RC # WRITING TO LOG 
+    exit $ex_code # EXITS WITH THIS CODE
+} #########################################################################################################################
+do_last() ######################## FUNCTION WHICH RUN EDITOR WITH LAST EDITING AND EXISTING FILE ##########################
+{
+    dir=`readlink -f "$1"`
+    list=`cat $WEDI_RC | sed '1!G;h;$!d' | grep "$dir" | cut -d '|' -f1 | cut -d '"' -f2 | tr ' ' '~'` #SOME MORE MAGIC !
+    for file in $list; do
+        r_file=`echo "$file" | tr '~' ' '` # REPLACES ~ WITH ' ' AS CHARACTER AND STORE TO STRING   
+        trace="$dir/$r_file" # FULL PATH FROM COMPONENTS DIRPATH+FILENAME
+        if [ -f "$trace" ]; then # TRUE WHEN FILE EXIST
+            do_edit $2 "$trace" # START EDITING
+        fi
+    done  
+    err_6 "$dir" # IF THERE WAS NOT ANY FILE EXITS WITH ERROR 6
+} ##########################################################################################################################
+do_ab() ############################### FUNCTION HANDLING WITH PARAMETERS -a or -b #########################################
+{
+    if echo "$2" | egrep -q "[0-9]{4}-[0-9]{2}-[0-9]{2}" ; then # TRUE WHEN ARGUMENT DATE FITS REGEX 
+        if [ -d "$3" ]; then # TRUE WHEN $3 IS DIRECTORY
+            dir=`readlink -f "$3"` # THEN dir CONTAINS PATH TO THIS DIRECTORY
+        elif [ -z "$3" ]; then  # TRUE WHEN $3 IS NOT SET
+            dir=`pwd` # THEN dir CONTAINS ACTUAL DIRECTORY
+        else
+            err_4 "$3" # WHEN $3 IS NOT A DIRECTORY AND IS SET TO SOME STRING IT IS ERROR 4
+        fi  
+        edge=`echo "$2" | tr -d '-'` # REMOVES '-' CHARACTER FROM STRING $2 WHICH CONTAINS ARGUMENT DATE
+    else
+        err_3 "$2" # WHEN ARGUMENT DATE DOES NOT FITS REGEX IT IS ERROR 3
+    fi
+    dates_list=`cat "$WEDI_RC" | grep "$dir" | sort | uniq | cut -d '|' -f2 | sort ` # CONTAINS LIST OF ALL DATES IN LOG FILE
+    for date in $dates_list; do
+        file_list=`cat "$WEDI_RC" | grep "$dir" | grep "$date" | sort | uniq | cut -d '|' -f1 | sort | uniq | cut -d '"' -f2 | tr ' ' '~'` # CONTAINS LIST OF ALL FILES IN LOG
+        n_date=`echo "$date" | tr -d '-'` # REMOVE '-' FROM EACH DATE IN LIST OF DATES FROM FILE THAN WE CAN COMPARE DATES LIKE NUMBERS
+        case $1 in
+            a ) 
+                if [ $n_date -ge $edge ]; then # WHEN IS GIVEN PARAMETER -a PRINTS ALL FILENAMES EDITING AFTER DATE GIVEN AS PARAMETER
+                    do_echo "$file_list" "$dir"
+                fi
+            ;; 
+            b )
+                if [ $n_date -le $edge ]; then # WHEN IS GIVEN PARAMETER -b PRINTS ALL FILENAMES EDITING BEFORE DATE GIVEN AS PARAMETER
+                    do_echo "$file_list" "$dir"
+                fi
+            ;;
+        esac
+    done | sort | uniq # THIS IS SUPER BECAUSE FOR PRINTS MANY EQUAL NAMES !
+    exit 0 #ALL DONE !
+} ##########################################################################################################################
+do_l() ############################### FUNCTION HANDLING WITH PARAMETER -l #################################################
+{
+    dir="$1" # $1 IS PATH TO DIRECTORY                           # $list IS LIST OF ALL FILES EDITED BY WRAPPER IN $dir DIRECTORY 
+    list=`cat "$WEDI_RC" | grep "$dir" | cut -d '|' -f1 | sort | uniq -c | sort -nr | rev | cut -d '"' -f2 | rev | tr ' ' '~'` 
+    do_echo "$list" "$dir" # CALLING FUNCTION
+    exit 0
+} ##########################################################################################################################
+do_echo() ############################ FUNCTION WHICH PRINTS NAMES OF FILES ################################################
+{
+    for file in $1; do 
+        r_file=`echo "$file" | tr '~' ' '` # REPLACES ~ WITH ' ' AS CHARACTER AND STORE TO STRING
+        if [ -f ""$2"/$r_file" ]; then
+            echo "$r_file" # PRINTS FILENAMES WHICH EXISTS
+        fi
+    done | sort
+} ##########################################################################################################################
+do_lm() ############################### FUNCTION HANDLING WITH PARAMETERS -l or -m #########################################
+{
+    if [ -d "$2" ]; then 
+        dir=`readlink -f "$2"`V # $2 IS PARAMETER OF -l OR -m
+    elif [ -z "$2" ]; then 
+        dir=`pwd`
+    else
+        err_4 "$2"
+    fi 
+    case $1 in
+    l )
+        do_l "$dir" $3    # $3 CONTAINS EDITING TOOL 
+        ;;
+    m )
+        do_m "$dir" $3    # $dir CONTAINS PATH TO DIRECTORY
+        ;;
+    esac
+} ##########################################################################################################################
+do_m() ############################### FUNCTION HANDLING WITH PARAMETER -m #################################################
+{
+    dir="$1" # $dir CONTAINS PATH TO DIRECTORY
+    list=`cat $WEDI_RC | grep "$dir" | cut -d '|' -f1 | sort | uniq -c | sort -nr | rev | cut -d '"' -f2 | rev | tr ' ' '~'` # LIST OF FILENAMES
+    for file in $list; do
+        r_file=`echo "$file" | tr '~' ' '` # REPLACES '~' WITH ' ' IN EACH FILENAME
+        trace="$dir/$r_file"
+        if [ -f "$trace" ]; then           
+            do_edit $2 "$trace"  # START EDITING
+        fi
+    done  
+    err_6 "$dir"
+} ##########################################################################################################################
+err_1() ############################### FUNCTIONS HANDLING ERRORS ##########################################################
+{
+    echo "Invalid combination of arguments.">&2
+    exit 1
+}
+err_3()
+{
+    echo "Invalid argument. In place of \"$1\" supose to be date in format YYYY-MM-DD.">&2
+    exit 3
+}
+err_4()
+{
+    echo "Invalid argument. Argument \"$1\" is not a directory.">&2
+    exit 4
+}
+err_5()
+{
+    echo "Too many arguments.">&2
+    exit 5
+}
+err_6()
+{
+    echo "Directory \"$1\"does not contain any file edited in the past.">&2
+    exit 6 
+} #########################################################################################################################
+################################# PIECE OF CODE  ##########################################################################
+test_var # calling function 
+if [ 0 -eq "$#" ]; then
+    dir=`pwd` 
+    do_last "$dir" $tool
+elif [ "$#" -eq 1 ] && [ -f "$1" ]; then
+    do_edit $tool "$1"
+elif [ "$#" -eq 1 ] && [ -d "$1" ] ; then
+    dir="$1"
+    do_last "$dir" $tool
+elif  echo "$1" | grep -q "^[^\-].*" && [ "$#" -eq 1 ];  then                                         
+    do_edit $tool "$1"    
+elif [ "$#" -gt 3 ]; then
+    err_5
+elif echo "$1" | grep -q "^\-[a-b,l-m]$"; then
+    while getopts ":a:b:lm" flag
+        do
+            case $flag in
+            a)
+                do_ab $flag $2 "$3" 
+                ;;
+            b)
+                do_ab $flag $2 "$3" 
+                ;;
+            l|m)
+                if [ "$#" -le 2 ]; then
+                    do_lm $flag "$2" $tool
+                else
+                    err_5
+                fi
+                ;;
+            :)
+                echo "Argument -$OPTARG need parameter.">&2
+                exit 2 
+                ;;
+            \?) 
+                err_1
+                ;;
+            esac
+        done
+else 
+    err_1
+fi
+########################################################################################################################
+############################################ THE END ####### HAVE A NICE DAY ! #########################################
+########################################################################################################################
